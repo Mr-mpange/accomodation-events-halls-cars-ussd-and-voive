@@ -13,7 +13,7 @@ class NotificationService {
   initializeEmailTransporter() {
     try {
       if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-        this.emailTransporter = nodemailer.createTransporter({
+        this.emailTransporter = nodemailer.createTransport({
           host: process.env.EMAIL_HOST,
           port: process.env.EMAIL_PORT || 587,
           secure: process.env.EMAIL_SECURE === 'true',

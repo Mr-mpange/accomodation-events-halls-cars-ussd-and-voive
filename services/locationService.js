@@ -29,8 +29,14 @@ class LocationService {
   }
 
   // Get location from OpenCellID
-  async getLocationFromCellTower(cellId, lac, mcc = '636', mnc = '01') {
+  async getLocationFromCellTower(cellId, lac, mcc = '636', mnc = '01', networkCode = null) {
     try {
+      // Check if API key is configured
+      if (!this.openCellIdApiKey || this.openCellIdApiKey === 'your_opencellid_key') {
+        logger.warn('OpenCellID API key not configured, using fallback location detection');
+        return this.getFallbackLocationFromCellTower(cellId, lac, mcc, mnc, networkCode);
+      }
+
       const response = await axios.get(this.openCellIdBaseUrl, {
         params: {
           key: this.openCellIdApiKey,
@@ -61,6 +67,83 @@ class LocationService {
         lac,
         error: error.message
       });
+      
+      // Fallback to approximate location
+      return this.getFallbackLocationFromCellTower(cellId, lac, mcc, mnc, networkCode);
+    }
+  }
+
+  // Fallback location detection based on network codes
+  getFallbackLocationFromCellTower(cellId, lac, mcc, mnc, networkCode = null) {
+    try {
+      // Basic location estimation based on MCC/MNC codes and network codes
+      const networkLocations = {
+        // Nigeria MCC = 636
+        '636': {
+          '01': { city: 'Lagos', state: 'Lagos', latitude: 6.5244, longitude: 3.3792 }, // MTN
+          '02': { city: 'Abuja', state: 'FCT', latitude: 9.0765, longitude: 7.3986 }, // Airtel
+          '03': { city: 'Port Harcourt', state: 'Rivers', latitude: 4.8156, longitude: 7.0498 }, // Glo
+          '04': { city: 'Kano', state: 'Kano', latitude: 12.0022, longitude: 8.5920 } // 9mobile
+        },
+        // Alternative network code patterns
+        '62101': { city: 'Lagos', state: 'Lagos', latitude: 6.5244, longitude: 3.3792 }, // MTN
+        '62102': { city: 'Abuja', state: 'FCT', latitude: 9.0765, longitude: 7.3986 }, // Airtel
+        '62103': { city: 'Port Harcourt', state: 'Rivers', latitude: 4.8156, longitude: 7.0498 }, // Glo
+        '62104': { city: 'Kano', state: 'Kano', latitude: 12.0022, longitude: 8.5920 }, // 9mobile
+        '62120': { city: 'Lagos', state: 'Lagos', latitude: 6.5244, longitude: 3.3792 }, // MTN variant
+        '62130': { city: 'Abuja', state: 'FCT', latitude: 9.0765, longitude: 7.3986 }, // Airtel variant
+      };
+
+      let location = null;
+
+      // Try networkCode first if provided
+      if (networkCode && networkLocations[networkCode]) {
+        location = networkLocations[networkCode];
+        logger.info('Location detected from networkCode', { networkCode, location });
+      }
+      
+      // Try MCC/MNC combination if networkCode didn't work
+      if (!location) {
+        location = networkLocations[mcc]?.[mnc];
+        if (location) {
+          logger.info('Location detected from MCC/MNC', { mcc, mnc, location });
+        }
+      }
+      
+      // Try direct network code lookup as fallback
+      if (!location && networkCode) {
+        const networkCodeVariant = `${mcc}${mnc}`;
+        location = networkLocations[networkCodeVariant];
+        if (location) {
+          logger.info('Location detected from MCC+MNC variant', { networkCodeVariant, location });
+        }
+      }
+
+      if (location) {
+        logger.info('Using fallback location detection', { cellId, lac, mcc, mnc, networkCode, location });
+        return {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracy: 5000, // 5km accuracy for fallback
+          city: location.city,
+          state: location.state,
+          fallback: true
+        };
+      }
+
+      // Default to Lagos if no match
+      logger.info('Using default location (Lagos)', { cellId, lac, mcc, mnc, networkCode });
+      return {
+        latitude: 6.5244,
+        longitude: 3.3792,
+        accuracy: 10000,
+        city: 'Lagos',
+        state: 'Lagos',
+        fallback: true,
+        default: true
+      };
+    } catch (error) {
+      logger.error('Fallback location detection failed', error);
       return null;
     }
   }
@@ -68,6 +151,12 @@ class LocationService {
   // Get approximate city/area from coordinates
   async getCityFromCoordinates(latitude, longitude) {
     try {
+      // Check if API key is configured
+      if (!process.env.OPENCAGE_API_KEY || process.env.OPENCAGE_API_KEY === 'your_opencage_key') {
+        logger.warn('OpenCage API key not configured, using fallback city detection');
+        return this.getFallbackCityFromCoordinates(latitude, longitude);
+      }
+
       // Using a reverse geocoding service (you can replace with your preferred service)
       const response = await axios.get(
         `https://api.opencagedata.com/geocode/v1/json`,
@@ -98,6 +187,71 @@ class LocationService {
         longitude,
         error: error.message
       });
+      
+      // Fallback to approximate city detection
+      return this.getFallbackCityFromCoordinates(latitude, longitude);
+    }
+  }
+
+  // Fallback city detection based on coordinates
+  getFallbackCityFromCoordinates(latitude, longitude) {
+    try {
+      // Major Nigerian cities with approximate boundaries
+      const cities = [
+        { name: 'Lagos', state: 'Lagos', lat: 6.5244, lng: 3.3792, radius: 0.5 },
+        { name: 'Abuja', state: 'FCT', lat: 9.0765, lng: 7.3986, radius: 0.3 },
+        { name: 'Kano', state: 'Kano', lat: 12.0022, lng: 8.5920, radius: 0.3 },
+        { name: 'Ibadan', state: 'Oyo', lat: 7.3775, lng: 3.9470, radius: 0.3 },
+        { name: 'Port Harcourt', state: 'Rivers', lat: 4.8156, lng: 7.0498, radius: 0.3 },
+        { name: 'Benin City', state: 'Edo', lat: 6.3350, lng: 5.6037, radius: 0.2 },
+        { name: 'Maiduguri', state: 'Borno', lat: 11.8311, lng: 13.1510, radius: 0.2 },
+        { name: 'Zaria', state: 'Kaduna', lat: 11.0804, lng: 7.7076, radius: 0.2 },
+        { name: 'Aba', state: 'Abia', lat: 5.1066, lng: 7.3667, radius: 0.2 },
+        { name: 'Jos', state: 'Plateau', lat: 9.8965, lng: 8.8583, radius: 0.2 }
+      ];
+
+      // Find closest city
+      let closestCity = null;
+      let minDistance = Infinity;
+
+      for (const city of cities) {
+        const distance = Math.sqrt(
+          Math.pow(latitude - city.lat, 2) + Math.pow(longitude - city.lng, 2)
+        );
+        
+        if (distance < city.radius && distance < minDistance) {
+          minDistance = distance;
+          closestCity = city;
+        }
+      }
+
+      if (closestCity) {
+        logger.info('Fallback city detection successful', { 
+          coordinates: { latitude, longitude },
+          detectedCity: closestCity.name 
+        });
+        
+        return {
+          city: closestCity.name,
+          state: closestCity.state,
+          country: 'Nigeria',
+          formatted: `${closestCity.name}, ${closestCity.state}, Nigeria`,
+          fallback: true
+        };
+      }
+
+      // Default to Lagos if no match
+      logger.info('Using default city (Lagos) for coordinates', { latitude, longitude });
+      return {
+        city: 'Lagos',
+        state: 'Lagos',
+        country: 'Nigeria',
+        formatted: 'Lagos, Lagos, Nigeria',
+        fallback: true,
+        default: true
+      };
+    } catch (error) {
+      logger.error('Fallback city detection failed', error);
       return null;
     }
   }

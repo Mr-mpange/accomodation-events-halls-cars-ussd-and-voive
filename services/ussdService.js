@@ -87,13 +87,19 @@ class USSDService {
   async processLocationData(session, networkCode, cellId, lac) {
     try {
       if (cellId && lac) {
-        const locationData = await locationService.getLocationFromCellTower(cellId, lac);
+        // Parse MCC and MNC from networkCode if available
+        let mcc = '636'; // Default Nigeria
+        let mnc = '01';  // Default MTN
         
-  // Process location data from cell tower
-  async processLocationData(session, networkCode, cellId, lac) {
-    try {
-      if (cellId && lac) {
-        const locationData = await locationService.getLocationFromCellTower(cellId, lac);
+        if (networkCode) {
+          // Extract MCC and MNC from networkCode (e.g., "62101" -> mcc="636", mnc="01")
+          if (networkCode.length >= 5) {
+            mcc = '636'; // Nigeria
+            mnc = networkCode.slice(-2); // Last 2 digits
+          }
+        }
+        
+        const locationData = await locationService.getLocationFromCellTower(cellId, lac, mcc, mnc, networkCode);
         
         if (locationData) {
           const cityData = await locationService.getCityFromCoordinates(
@@ -177,6 +183,11 @@ class USSDService {
 
   // Handle main menu selection
   async handleMainMenu(session, input) {
+    // If no input (first time dialing), show the main menu
+    if (!input || input === '') {
+      return await this.showMainMenu(session);
+    }
+    
     if (session.data.detectedLocation?.city) {
       return await this.handleLocationConfirm(session, input);
     } else {
@@ -688,350 +699,6 @@ class USSDService {
   generateUSSDResponse(text, continueSession = true) {
     const prefix = continueSession ? 'CON ' : 'END ';
     return prefix + text;
-  }
-}
-        }
-      }
-      
-      session.data.locationChecked = true;
-      
-      // Save location session
-      await locationService.saveLocationSession(
-        session.sessionId,
-        session.phoneNumber,
-        {
-          cellId,
-          lac,
-          ...session.data.detectedLocation
-        }
-      );
-    } catch (error) {
-      logger.error('Location processing error', { sessionId: session.sessionId, error });
-    }
-  }
-
-  // Show main menu
-  showMainMenu(session) {
-    this.updateSession(session.sessionId, { step: 'main_menu' });
-    
-    let menu = 'Welcome to Visitor Assist\n';
-    
-    if (session.data.detectedLocation && session.data.detectedLocation.city) {
-      menu += `Location: ${session.data.detectedLocation.city}\n`;
-      menu += '1. Confirm location\n';
-      menu += '2. Change location\n';
-      menu += '3. Stay (Hotels)\n';
-      menu += '4. Ride (Transport)\n';
-      menu += '5. Hall (Events)';
-    } else {
-      menu += '1. Stay (Hotels)\n';
-      menu += '2. Ride (Transport)\n';
-      menu += '3. Hall (Events)\n';
-      menu += '4. Set location';
-    }
-    
-    return africasTalking.generateUSSDResponse(menu);
-  }
-
-  // Handle main menu selection
-  handleMainMenu(session, input) {
-    const hasLocation = session.data.detectedLocation && session.data.detectedLocation.city;
-    
-    if (hasLocation) {
-      switch (input) {
-        case '1':
-          return this.handleLocationConfirm(session, '1');
-        case '2':
-          return this.showLocationManual(session);
-        case '3':
-          return this.showServiceCategory(session, 'stay');
-        case '4':
-          return this.showServiceCategory(session, 'ride');
-        case '5':
-          return this.showServiceCategory(session, 'hall');
-        default:
-          return this.showMainMenu(session);
-      }
-    } else {
-      switch (input) {
-        case '1':
-          return this.showServiceCategory(session, 'stay');
-        case '2':
-          return this.showServiceCategory(session, 'ride');
-        case '3':
-          return this.showServiceCategory(session, 'hall');
-        case '4':
-          return this.showLocationManual(session);
-        default:
-          return this.showMainMenu(session);
-      }
-    }
-  }
-
-  // Handle location confirmation
-  handleLocationConfirm(session, input) {
-    if (input === '1') {
-      session.data.confirmedLocation = session.data.detectedLocation;
-      return this.showMainMenu(session);
-    } else {
-      return this.showLocationManual(session);
-    }
-  }
-
-  // Show manual location selection
-  async showLocationManual(session) {
-    try {
-      this.updateSession(session.sessionId, { step: 'location_manual' });
-      
-      const locations = await locationService.getPredefinedLocations();
-      let menu = 'Select your location:\n';
-      
-      locations.slice(0, 8).forEach((location, index) => {
-        menu += `${index + 1}. ${location.city}\n`;
-      });
-      
-      if (locations.length > 8) {
-        menu += '9. More locations';
-      }
-      
-      session.data.locationOptions = locations;
-      return africasTalking.generateUSSDResponse(menu);
-    } catch (error) {
-      logger.error('Error showing manual location', error);
-      return africasTalking.generateUSSDResponse('Error loading locations. Try again.', false);
-    }
-  }
-
-  // Handle manual location selection
-  handleLocationManual(session, input) {
-    const index = parseInt(input) - 1;
-    const locations = session.data.locationOptions || [];
-    
-    if (index >= 0 && index < locations.length) {
-      session.data.confirmedLocation = locations[index];
-      return this.showMainMenu(session);
-    } else {
-      return this.showLocationManual(session);
-    }
-  }
-
-  // Show service category
-  async showServiceCategory(session, category) {
-    try {
-      this.updateSession(session.sessionId, { 
-        step: 'service_list',
-        data: { ...session.data, selectedCategory: category }
-      });
-      
-      const services = await this.getServicesByCategory(category, session.data.confirmedLocation);
-      
-      if (services.length === 0) {
-        return africasTalking.generateUSSDResponse(
-          `No ${category} services available in your area. Call 0800-VISITOR for assistance.`,
-          false
-        );
-      }
-      
-      let menu = `${category.toUpperCase()} Services:\n`;
-      services.slice(0, 8).forEach((service, index) => {
-        menu += `${index + 1}. ${service.name}\n`;
-      });
-      
-      if (services.length > 8) {
-        menu += '9. More options\n';
-      }
-      menu += '0. Back to main menu';
-      
-      session.data.serviceOptions = services;
-      return africasTalking.generateUSSDResponse(menu);
-    } catch (error) {
-      logger.error('Error showing service category', { category, error });
-      return africasTalking.generateUSSDResponse('Error loading services. Try again.', false);
-    }
-  }
-
-  // Handle service list selection
-  handleServiceList(session, input) {
-    if (input === '0') {
-      return this.showMainMenu(session);
-    }
-    
-    const index = parseInt(input) - 1;
-    const services = session.data.serviceOptions || [];
-    
-    if (index >= 0 && index < services.length) {
-      return this.showServiceDetails(session, services[index]);
-    } else {
-      return this.showServiceCategory(session, session.data.selectedCategory);
-    }
-  }
-
-  // Show service details
-  showServiceDetails(session, service) {
-    this.updateSession(session.sessionId, { 
-      step: 'service_details',
-      data: { ...session.data, selectedService: service }
-    });
-    
-    let details = `${service.name}\n`;
-    details += `Price: ${service.price}\n`;
-    if (service.description) {
-      details += `${service.description.substring(0, 50)}...\n`;
-    }
-    details += '1. Book now\n';
-    details += '2. Call for details\n';
-    details += '0. Back';
-    
-    return africasTalking.generateUSSDResponse(details);
-  }
-
-  // Handle service details selection
-  async handleServiceDetails(session, input) {
-    switch (input) {
-      case '1':
-        return this.showBookingConfirm(session);
-      case '2':
-        // Initiate voice call
-        await this.initiateVoiceCall(session);
-        return africasTalking.generateUSSDResponse(
-          'You will receive a call shortly for more details.',
-          false
-        );
-      case '0':
-        return this.showServiceCategory(session, session.data.selectedCategory);
-      default:
-        return this.showServiceDetails(session, session.data.selectedService);
-    }
-  }
-
-  // Show booking confirmation
-  showBookingConfirm(session) {
-    this.updateSession(session.sessionId, { step: 'booking_confirm' });
-    
-    const service = session.data.selectedService;
-    let confirm = `Confirm booking:\n`;
-    confirm += `${service.name}\n`;
-    confirm += `Price: ${service.price}\n`;
-    confirm += '1. Confirm\n';
-    confirm += '2. Cancel';
-    
-    return africasTalking.generateUSSDResponse(confirm);
-  }
-
-  // Handle booking confirmation
-  async handleBookingConfirm(session, input) {
-    if (input === '1') {
-      try {
-        const booking = await this.createBooking(session);
-        await this.notifyOwner(booking);
-        
-        return africasTalking.generateUSSDResponse(
-          `Booking confirmed! Ref: ${booking.reference}. You will receive SMS confirmation.`,
-          false
-        );
-      } catch (error) {
-        logger.error('Booking creation error', error);
-        return africasTalking.generateUSSDResponse(
-          'Booking failed. Please try again or call 0800-VISITOR.',
-          false
-        );
-      }
-    } else {
-      return this.showMainMenu(session);
-    }
-  }
-
-  // Get services by category and location
-  async getServicesByCategory(category, location) {
-    try {
-      let query = `
-        SELECT s.*, o.name as owner_name, o.phone as owner_phone
-        FROM services s
-        JOIN owners o ON s.owner_id = o.id
-        WHERE s.category = ? AND s.is_active = 1
-      `;
-      const params = [category];
-      
-      if (location && location.city) {
-        query += ` AND (s.city = ? OR s.city IS NULL)`;
-        params.push(location.city);
-      }
-      
-      query += ` ORDER BY s.name LIMIT 20`;
-      
-      const [rows] = await db.execute(query, params);
-      return rows;
-    } catch (error) {
-      logger.error('Error getting services by category', { category, error });
-      throw error;
-    }
-  }
-
-  // Create booking
-  async createBooking(session) {
-    const service = session.data.selectedService;
-    const location = session.data.confirmedLocation;
-    const reference = this.generateBookingReference();
-    
-    const [result] = await db.execute(`
-      INSERT INTO bookings 
-      (reference, phone_number, service_id, owner_id, location_data, status, created_at)
-      VALUES (?, ?, ?, ?, ?, 'pending', NOW())
-    `, [
-      reference,
-      session.phoneNumber,
-      service.id,
-      service.owner_id,
-      JSON.stringify(location)
-    ]);
-    
-    // Send SMS confirmation to user
-    await africasTalking.sendSMS(
-      session.phoneNumber,
-      `Booking confirmed! Ref: ${reference}. Service: ${service.name}. Owner will contact you shortly.`
-    );
-    
-    return {
-      id: result.insertId,
-      reference,
-      service,
-      phoneNumber: session.phoneNumber
-    };
-  }
-
-  // Notify owner of new booking
-  async notifyOwner(booking) {
-    const message = `New booking! Ref: ${booking.reference}. Service: ${booking.service.name}. Customer: ${booking.phoneNumber}`;
-    
-    await africasTalking.sendSMS(booking.service.owner_phone, message);
-  }
-
-  // Initiate voice call for detailed inquiry
-  async initiateVoiceCall(session) {
-    try {
-      await africasTalking.makeCall(session.phoneNumber);
-      
-      // Store call session data for voice handler
-      await db.execute(`
-        INSERT INTO voice_sessions 
-        (phone_number, service_id, session_data, created_at)
-        VALUES (?, ?, ?, NOW())
-      `, [
-        session.phoneNumber,
-        session.data.selectedService.id,
-        JSON.stringify(session.data)
-      ]);
-    } catch (error) {
-      logger.error('Voice call initiation error', error);
-      throw error;
-    }
-  }
-
-  // Generate booking reference
-  generateBookingReference() {
-    const timestamp = Date.now().toString(36);
-    const random = Math.random().toString(36).substring(2, 5);
-    return `VA${timestamp}${random}`.toUpperCase();
   }
 }
 
